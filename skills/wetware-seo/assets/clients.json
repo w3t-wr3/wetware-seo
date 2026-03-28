@@ -1,0 +1,76 @@
+{
+  "clients": [
+    {
+      "name": "Big Thunder Dock Co.",
+      "slug": "bt-docks",
+      "domain": "bigthunderdocks.com",
+      "group": "big-thunder",
+      "platform": "Next.js + Vercel",
+      "report_cadence": "bi-weekly",
+      "pages": [
+        "/",
+        "/services",
+        "/contact"
+      ]
+    },
+    {
+      "name": "Big Thunder Boat Rentals",
+      "slug": "bt-boats",
+      "domain": "bigthunderboatrentals.com",
+      "group": "big-thunder",
+      "platform": "Next.js + Supabase + Vercel",
+      "report_cadence": "bi-weekly",
+      "pages": [
+        "/"
+      ]
+    },
+    {
+      "name": "BT Wake",
+      "slug": "bt-wake",
+      "domain": "btwake.com",
+      "group": "big-thunder",
+      "platform": "Unknown",
+      "report_cadence": "bi-weekly",
+      "pages": [
+        "/"
+      ]
+    },
+    {
+      "name": "Iconic Yacht Charters",
+      "slug": "iconic",
+      "domain": "iconic-yachtcharters.com",
+      "group": "big-thunder",
+      "platform": "Unknown",
+      "report_cadence": "bi-weekly",
+      "pages": [
+        "/"
+      ]
+    },
+    {
+      "name": "Form Chiropractic",
+      "slug": "form-chiro",
+      "domain": "formchiropractickc.com",
+      "group": "form-chiro",
+      "platform": "Custom site",
+      "report_cadence": "monthly",
+      "pages": [
+        "/",
+        "/services",
+        "/about",
+        "/contact"
+      ]
+    }
+  ],
+  "groups": {
+    "big-thunder": {
+      "label": "Big Thunder Marine",
+      "report_cadence": "bi-weekly",
+      "contact": "Mandy Faes"
+    },
+    "form-chiro": {
+      "label": "Form Chiropractic",
+      "report_cadence": "monthly",
+      "contact": "Form Chiro"
+    }
+  }
+}
