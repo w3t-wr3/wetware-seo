@@ -103,13 +103,44 @@ HEADER
   echo "" >> "$OUTFILE"
   SITEMAP_STATUS=$(curl -sI -L -o /dev/null -w "%{http_code}" --max-time 5 "https://$DOMAIN/sitemap.xml" 2>/dev/null || echo "000")
 
+  SITEMAP_CONTENT=""
   if [ "$SITEMAP_STATUS" = "200" ]; then
-    SITEMAP_URLS=$(curl -sL --max-time 10 "https://$DOMAIN/sitemap.xml" 2>/dev/null | grep -c "<loc>" || echo "0")
+    SITEMAP_CONTENT=$(curl -sL --max-time 10 "https://$DOMAIN/sitemap.xml" 2>/dev/null || echo "")
+    SITEMAP_URLS=$(echo "$SITEMAP_CONTENT" | grep -c "<loc>" || echo "0")
     echo "Status: Present (200); $SITEMAP_URLS URLs found" >> "$OUTFILE"
   else
+    SITEMAP_URLS=0
     echo "**MISSING** (HTTP $SITEMAP_STATUS)" >> "$OUTFILE"
   fi
   echo "" >> "$OUTFILE"
+
+  # --- Authority score accumulators (collected during per-page loop) ---
+  AUTH_WORD_COUNT=0
+  AUTH_INTERNAL_LINKS=0
+  AUTH_HAS_GBP=0
+  AUTH_SOCIAL_FB=0
+  AUTH_SOCIAL_IG=0
+  AUTH_SOCIAL_TW=0
+  AUTH_SOCIAL_LI=0
+  AUTH_HAS_REVIEWS=0
+  AUTH_HAS_FAQ_SECTION=0
+  AUTH_HAS_FAQ_SCHEMA=0
+  AUTH_HAS_BREADCRUMB_SCHEMA=0
+  AUTH_JSONLD_TOTAL=0
+  AUTH_HAS_BLOG=0
+  AUTH_TITLES_COLLECTED=""
+  # Mobile PageSpeed raw values for Authority (captured from PSI)
+  AUTH_MOBILE_PERF="N/A"
+  AUTH_LCP_RAW="N/A"
+  AUTH_CLS_RAW="N/A"
+  AUTH_TBT_RAW="N/A"
+
+  # Check sitemap for blog/news/articles URLs
+  if [ -n "$SITEMAP_CONTENT" ]; then
+    if echo "$SITEMAP_CONTENT" | grep -qiE '/blog|/news|/articles'; then
+      AUTH_HAS_BLOG=1
+    fi
+  fi
 
   # --- Per-page checks ---
   echo "## Page Analysis" >> "$OUTFILE"
@@ -176,6 +207,64 @@ HEADER
       print "H1_COUNT=\x27$h1\x27\n";
     ' "$TMPHTML")"
 
+    # --- Authority data extraction (before temp file cleanup) ---
+    # Word count: strip HTML tags, count words (homepage only, PAGE="/")
+    if [ "$PAGE" = "/" ]; then
+      AUTH_WORD_COUNT=$(perl -0777 -pe 's/<script[^>]*>.*?<\/script>//gsi; s/<style[^>]*>.*?<\/style>//gsi; s/<[^>]+>//g; s/&[a-z]+;//gi; s/\s+/ /g;' "$TMPHTML" | wc -w | tr -d ' ')
+      AUTH_WORD_COUNT=${AUTH_WORD_COUNT:-0}
+
+      # Internal links on homepage: href="/" or href="https://DOMAIN"
+      AUTH_INTERNAL_LINKS=$(grep -oiE 'href="(/[^"]*|https?://'"$DOMAIN"'[^"]*)"' "$TMPHTML" | wc -l | tr -d ' ')
+      AUTH_INTERNAL_LINKS=${AUTH_INTERNAL_LINKS:-0}
+
+      # Google Business Profile or NAP
+      if grep -qiE 'google\.com/maps|"@type"\s*:\s*"(LocalBusiness|PostalAddress)"' "$TMPHTML" 2>/dev/null; then
+        AUTH_HAS_GBP=1
+      fi
+
+      # Social media links
+      grep -qi 'facebook\.com' "$TMPHTML" 2>/dev/null && AUTH_SOCIAL_FB=1
+      grep -qi 'instagram\.com' "$TMPHTML" 2>/dev/null && AUTH_SOCIAL_IG=1
+      grep -qiE 'twitter\.com|x\.com' "$TMPHTML" 2>/dev/null && AUTH_SOCIAL_TW=1
+      grep -qi 'linkedin\.com' "$TMPHTML" 2>/dev/null && AUTH_SOCIAL_LI=1
+
+      # Reviews/testimonials
+      if grep -qiE 'review|testimonial|stars|rating' "$TMPHTML" 2>/dev/null; then
+        AUTH_HAS_REVIEWS=1
+      fi
+
+      # FAQ section (check nav links and page content)
+      if grep -qiE 'href="[^"]*faq[^"]*"|id="faq"|class="[^"]*faq[^"]*"|<h[2-4][^>]*>[^<]*faq[^<]*</h' "$TMPHTML" 2>/dev/null; then
+        AUTH_HAS_FAQ_SECTION=1
+      fi
+
+      # Blog/content section from nav links on homepage
+      if [ "${AUTH_HAS_BLOG:-0}" -eq 0 ] 2>/dev/null; then
+        if grep -qiE 'href="[^"]*/blog[^"]*"|href="[^"]*/news[^"]*"|href="[^"]*/articles[^"]*"' "$TMPHTML" 2>/dev/null; then
+          AUTH_HAS_BLOG=1
+        fi
+      fi
+    fi
+
+    # JSON-LD schema types (all pages)
+    AUTH_JSONLD_TOTAL=$((AUTH_JSONLD_TOTAL + JSONLD_COUNT))
+
+    # FAQPage schema
+    if grep -qi '"FAQPage"' "$TMPHTML" 2>/dev/null; then
+      AUTH_HAS_FAQ_SCHEMA=1
+      AUTH_HAS_FAQ_SECTION=1
+    fi
+
+    # Breadcrumb schema
+    if grep -qi '"BreadcrumbList"' "$TMPHTML" 2>/dev/null; then
+      AUTH_HAS_BREADCRUMB_SCHEMA=1
+    fi
+
+    # Collect title for uniqueness comparison
+    if [ "$META_TITLE" != "MISSING" ] && [ -n "$META_TITLE" ]; then
+      AUTH_TITLES_COLLECTED="${AUTH_TITLES_COLLECTED}${META_TITLE}"$'\n'
+    fi
+
     rm -f "$TMPHTML"
 
     echo "| Check | Value |" >> "$OUTFILE"
@@ -226,6 +315,14 @@ HEADER
       TBT=$(echo "$PSI_RESULT" | jq -r '.lighthouseResult.audits["total-blocking-time"].displayValue // "N/A"' 2>/dev/null || echo "N/A")
       CLS=$(echo "$PSI_RESULT" | jq -r '.lighthouseResult.audits["cumulative-layout-shift"].displayValue // "N/A"' 2>/dev/null || echo "N/A")
 
+      # Capture mobile PSI values for Authority Page Experience scoring
+      if [ "$STRATEGY" = "mobile" ] && [ "$PAGE" = "/" ]; then
+        AUTH_MOBILE_PERF="${PERF_SCORE}"
+        AUTH_LCP_RAW=$(echo "$PSI_RESULT" | jq -r '.lighthouseResult.audits["largest-contentful-paint"].numericValue // empty' 2>/dev/null || echo "")
+        AUTH_CLS_RAW=$(echo "$PSI_RESULT" | jq -r '.lighthouseResult.audits["cumulative-layout-shift"].numericValue // empty' 2>/dev/null || echo "")
+        AUTH_TBT_RAW=$(echo "$PSI_RESULT" | jq -r '.lighthouseResult.audits["total-blocking-time"].numericValue // empty' 2>/dev/null || echo "")
+      fi
+
       echo "**$STRAT_LABEL:**" >> "$OUTFILE"
       echo "" >> "$OUTFILE"
       echo "| Metric | Score |" >> "$OUTFILE"
@@ -246,10 +343,10 @@ HEADER
   done
 
   # ==========================================================
-  # WETWARE SEO SCORE: computed from collected data above
+  # WSS FOUNDATION: computed from collected data above
   # 100-point scale across 6 categories
   # ==========================================================
-  echo "## Wetware SEO Score" >> "$OUTFILE"
+  echo "## WSS Foundation" >> "$OUTFILE"
   echo "" >> "$OUTFILE"
 
   WSS_TOTAL=0
@@ -368,10 +465,191 @@ HEADER
   echo "| **Total** | **$WSS_TOTAL** | **100** |" >> "$OUTFILE"
   echo "" >> "$OUTFILE"
 
-  echo "---" >> "$OUTFILE"
-  echo "Collected by SEO Pipeline v2.0 (Wetware SEO Score)" >> "$OUTFILE"
+  # ==========================================================
+  # WSS AUTHORITY: content quality & competitive readiness
+  # 100-point scale across 5 categories
+  # ==========================================================
+  echo "## WSS Authority" >> "$OUTFILE"
+  echo "" >> "$OUTFILE"
 
-  echo "  -> $OUTFILE (WSS: ${WSS_TOTAL}/100 ${WSS_GRADE})"
+  AUTH_TOTAL=0
+
+  # --- Content Quality (30 pts) ---
+  AUTH_CQ=0
+  # Word count scoring
+  if [ "${AUTH_WORD_COUNT:-0}" -ge 1000 ] 2>/dev/null; then
+    AUTH_CQ=$((AUTH_CQ + 15))
+  elif [ "${AUTH_WORD_COUNT:-0}" -ge 500 ] 2>/dev/null; then
+    AUTH_CQ=$((AUTH_CQ + 10))
+  elif [ "${AUTH_WORD_COUNT:-0}" -ge 300 ] 2>/dev/null; then
+    AUTH_CQ=$((AUTH_CQ + 5))
+  fi
+  # Unique pages in sitemap
+  if [ "${SITEMAP_URLS:-0}" -gt 10 ] 2>/dev/null; then
+    AUTH_CQ=$((AUTH_CQ + 10))
+  elif [ "${SITEMAP_URLS:-0}" -ge 6 ] 2>/dev/null; then
+    AUTH_CQ=$((AUTH_CQ + 8))
+  elif [ "${SITEMAP_URLS:-0}" -ge 2 ] 2>/dev/null; then
+    AUTH_CQ=$((AUTH_CQ + 5))
+  fi
+  # Blog/content section (detected from sitemap URLs + homepage nav links)
+  [ "${AUTH_HAS_BLOG:-0}" -eq 1 ] 2>/dev/null && AUTH_CQ=$((AUTH_CQ + 5))
+  [ $AUTH_CQ -gt 30 ] && AUTH_CQ=30
+  AUTH_TOTAL=$((AUTH_TOTAL + AUTH_CQ))
+
+  # --- Internal Linking (15 pts) ---
+  AUTH_IL=0
+  if [ "${AUTH_INTERNAL_LINKS:-0}" -gt 20 ] 2>/dev/null; then
+    AUTH_IL=15
+  elif [ "${AUTH_INTERNAL_LINKS:-0}" -ge 11 ] 2>/dev/null; then
+    AUTH_IL=10
+  elif [ "${AUTH_INTERNAL_LINKS:-0}" -ge 4 ] 2>/dev/null; then
+    AUTH_IL=5
+  fi
+  AUTH_TOTAL=$((AUTH_TOTAL + AUTH_IL))
+
+  # --- External Readiness (20 pts) ---
+  AUTH_ER=0
+  # GBP / NAP
+  [ "${AUTH_HAS_GBP:-0}" -eq 1 ] 2>/dev/null && AUTH_ER=$((AUTH_ER + 5))
+  # Social media links: +2 each, max 8
+  AUTH_SOCIAL_PTS=0
+  [ "${AUTH_SOCIAL_FB:-0}" -eq 1 ] 2>/dev/null && AUTH_SOCIAL_PTS=$((AUTH_SOCIAL_PTS + 2))
+  [ "${AUTH_SOCIAL_IG:-0}" -eq 1 ] 2>/dev/null && AUTH_SOCIAL_PTS=$((AUTH_SOCIAL_PTS + 2))
+  [ "${AUTH_SOCIAL_TW:-0}" -eq 1 ] 2>/dev/null && AUTH_SOCIAL_PTS=$((AUTH_SOCIAL_PTS + 2))
+  [ "${AUTH_SOCIAL_LI:-0}" -eq 1 ] 2>/dev/null && AUTH_SOCIAL_PTS=$((AUTH_SOCIAL_PTS + 2))
+  [ $AUTH_SOCIAL_PTS -gt 8 ] && AUTH_SOCIAL_PTS=8
+  AUTH_ER=$((AUTH_ER + AUTH_SOCIAL_PTS))
+  # Reviews/testimonials
+  [ "${AUTH_HAS_REVIEWS:-0}" -eq 1 ] 2>/dev/null && AUTH_ER=$((AUTH_ER + 4))
+  # FAQ section or FAQ schema
+  if [ "${AUTH_HAS_FAQ_SECTION:-0}" -eq 1 ] 2>/dev/null || [ "${AUTH_HAS_FAQ_SCHEMA:-0}" -eq 1 ] 2>/dev/null; then
+    AUTH_ER=$((AUTH_ER + 3))
+  fi
+  [ $AUTH_ER -gt 20 ] && AUTH_ER=20
+  AUTH_TOTAL=$((AUTH_TOTAL + AUTH_ER))
+
+  # --- Technical Depth (20 pts) ---
+  AUTH_TD=0
+  # JSON-LD schema count (total across all pages)
+  if [ "${AUTH_JSONLD_TOTAL:-0}" -ge 4 ] 2>/dev/null; then
+    AUTH_TD=$((AUTH_TD + 8))
+  elif [ "${AUTH_JSONLD_TOTAL:-0}" -ge 2 ] 2>/dev/null; then
+    AUTH_TD=$((AUTH_TD + 6))
+  elif [ "${AUTH_JSONLD_TOTAL:-0}" -ge 1 ] 2>/dev/null; then
+    AUTH_TD=$((AUTH_TD + 3))
+  fi
+  # FAQPage schema specifically
+  [ "${AUTH_HAS_FAQ_SCHEMA:-0}" -eq 1 ] 2>/dev/null && AUTH_TD=$((AUTH_TD + 4))
+  # Breadcrumb schema
+  [ "${AUTH_HAS_BREADCRUMB_SCHEMA:-0}" -eq 1 ] 2>/dev/null && AUTH_TD=$((AUTH_TD + 4))
+  # Unique titles across pages
+  if [ "$PAGE_COUNT" -gt 1 ] 2>/dev/null && [ -n "$AUTH_TITLES_COLLECTED" ]; then
+    AUTH_UNIQUE_TITLES=$(echo "$AUTH_TITLES_COLLECTED" | sort -u | grep -c . || echo "0")
+    AUTH_TOTAL_TITLES=$(echo "$AUTH_TITLES_COLLECTED" | grep -c . || echo "0")
+    if [ "$AUTH_UNIQUE_TITLES" -eq "$AUTH_TOTAL_TITLES" ] 2>/dev/null && [ "$AUTH_TOTAL_TITLES" -gt 1 ] 2>/dev/null; then
+      AUTH_TD=$((AUTH_TD + 4))
+    elif [ "$AUTH_UNIQUE_TITLES" -gt 1 ] 2>/dev/null; then
+      AUTH_TD=$((AUTH_TD + 2))
+    fi
+  fi
+  [ $AUTH_TD -gt 20 ] && AUTH_TD=20
+  AUTH_TOTAL=$((AUTH_TOTAL + AUTH_TD))
+
+  # --- Page Experience (15 pts) ---
+  AUTH_PE=0
+  # Mobile PageSpeed >= 90: +5, >= 70: +3, >= 50: +1
+  if [ "${AUTH_MOBILE_PERF:-N/A}" != "N/A" ] 2>/dev/null; then
+    if [ "$AUTH_MOBILE_PERF" -ge 90 ] 2>/dev/null; then
+      AUTH_PE=$((AUTH_PE + 5))
+    elif [ "$AUTH_MOBILE_PERF" -ge 70 ] 2>/dev/null; then
+      AUTH_PE=$((AUTH_PE + 3))
+    elif [ "$AUTH_MOBILE_PERF" -ge 50 ] 2>/dev/null; then
+      AUTH_PE=$((AUTH_PE + 1))
+    fi
+  fi
+  # LCP: numericValue is in ms; <= 2500ms: +5, <= 4000ms: +3
+  if [ -n "${AUTH_LCP_RAW}" ] && [ "${AUTH_LCP_RAW}" != "N/A" ] && [ "${AUTH_LCP_RAW}" != "" ]; then
+    AUTH_LCP_MS=$(printf '%.0f' "$AUTH_LCP_RAW" 2>/dev/null || echo "99999")
+    if [ "$AUTH_LCP_MS" -le 2500 ] 2>/dev/null; then
+      AUTH_PE=$((AUTH_PE + 5))
+    elif [ "$AUTH_LCP_MS" -le 4000 ] 2>/dev/null; then
+      AUTH_PE=$((AUTH_PE + 3))
+    fi
+  fi
+  # CLS: numericValue is raw; <= 0.1: +3 (compare as integer: multiply by 1000)
+  if [ -n "${AUTH_CLS_RAW}" ] && [ "${AUTH_CLS_RAW}" != "N/A" ] && [ "${AUTH_CLS_RAW}" != "" ]; then
+    AUTH_CLS_INT=$(printf '%.0f' "$(echo "${AUTH_CLS_RAW} * 1000" | bc 2>/dev/null || echo "9999")" 2>/dev/null || echo "9999")
+    if [ "$AUTH_CLS_INT" -le 100 ] 2>/dev/null; then
+      AUTH_PE=$((AUTH_PE + 3))
+    fi
+  fi
+  # TBT: numericValue is in ms; < 200ms: +2
+  if [ -n "${AUTH_TBT_RAW}" ] && [ "${AUTH_TBT_RAW}" != "N/A" ] && [ "${AUTH_TBT_RAW}" != "" ]; then
+    AUTH_TBT_MS=$(printf '%.0f' "$AUTH_TBT_RAW" 2>/dev/null || echo "99999")
+    if [ "$AUTH_TBT_MS" -lt 200 ] 2>/dev/null; then
+      AUTH_PE=$((AUTH_PE + 2))
+    fi
+  fi
+  [ $AUTH_PE -gt 15 ] && AUTH_PE=15
+  AUTH_TOTAL=$((AUTH_TOTAL + AUTH_PE))
+
+  # Cap at 100
+  [ $AUTH_TOTAL -gt 100 ] && AUTH_TOTAL=100
+
+  # Grade
+  if [ $AUTH_TOTAL -ge 90 ]; then AUTH_GRADE="A"
+  elif [ $AUTH_TOTAL -ge 80 ]; then AUTH_GRADE="B+"
+  elif [ $AUTH_TOTAL -ge 70 ]; then AUTH_GRADE="B"
+  elif [ $AUTH_TOTAL -ge 60 ]; then AUTH_GRADE="C+"
+  elif [ $AUTH_TOTAL -ge 50 ]; then AUTH_GRADE="C"
+  elif [ $AUTH_TOTAL -ge 40 ]; then AUTH_GRADE="D"
+  else AUTH_GRADE="F"
+  fi
+
+  echo "**Overall: ${AUTH_TOTAL}/100 (${AUTH_GRADE})**" >> "$OUTFILE"
+  echo "" >> "$OUTFILE"
+  echo "| Category | Points | Max |" >> "$OUTFILE"
+  echo "|----------|--------|-----|" >> "$OUTFILE"
+  echo "| Content Quality (word count, pages, blog) | $AUTH_CQ | 30 |" >> "$OUTFILE"
+  echo "| Internal Linking (homepage links) | $AUTH_IL | 15 |" >> "$OUTFILE"
+  echo "| External Readiness (GBP, social, reviews, FAQ) | $AUTH_ER | 20 |" >> "$OUTFILE"
+  echo "| Technical Depth (schemas, breadcrumbs, titles) | $AUTH_TD | 20 |" >> "$OUTFILE"
+  echo "| Page Experience (PageSpeed, LCP, CLS, TBT) | $AUTH_PE | 15 |" >> "$OUTFILE"
+  echo "| **Total** | **$AUTH_TOTAL** | **100** |" >> "$OUTFILE"
+  echo "" >> "$OUTFILE"
+
+  # ==========================================================
+  # COMBINED WSS: average of Foundation and Authority
+  # ==========================================================
+  echo "## Combined WSS" >> "$OUTFILE"
+  echo "" >> "$OUTFILE"
+
+  COMBINED=$((( WSS_TOTAL + AUTH_TOTAL ) / 2))
+
+  # Grade
+  if [ $COMBINED -ge 90 ]; then COMBINED_GRADE="A"
+  elif [ $COMBINED -ge 80 ]; then COMBINED_GRADE="B+"
+  elif [ $COMBINED -ge 70 ]; then COMBINED_GRADE="B"
+  elif [ $COMBINED -ge 60 ]; then COMBINED_GRADE="C+"
+  elif [ $COMBINED -ge 50 ]; then COMBINED_GRADE="C"
+  elif [ $COMBINED -ge 40 ]; then COMBINED_GRADE="D"
+  else COMBINED_GRADE="F"
+  fi
+
+  echo "**Overall: ${COMBINED}/100 (${COMBINED_GRADE})**" >> "$OUTFILE"
+  echo "" >> "$OUTFILE"
+  echo "| Score | Points | Grade |" >> "$OUTFILE"
+  echo "|-------|--------|-------|" >> "$OUTFILE"
+  echo "| WSS Foundation | ${WSS_TOTAL}/100 | $WSS_GRADE |" >> "$OUTFILE"
+  echo "| WSS Authority | ${AUTH_TOTAL}/100 | $AUTH_GRADE |" >> "$OUTFILE"
+  echo "| **Combined** | **${COMBINED}/100** | **$COMBINED_GRADE** |" >> "$OUTFILE"
+  echo "" >> "$OUTFILE"
+
+  echo "---" >> "$OUTFILE"
+  echo "Collected by SEO Pipeline v3.0 (WSS Foundation + Authority)" >> "$OUTFILE"
+
+  echo "  -> $OUTFILE (Foundation: ${WSS_TOTAL}/100, Authority: ${AUTH_TOTAL}/100, Combined: ${COMBINED}/100)"
 done
 
 echo ""

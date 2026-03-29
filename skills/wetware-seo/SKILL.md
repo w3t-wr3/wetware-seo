@@ -49,11 +49,13 @@ Create a `clients.json` file in your project with this structure:
 }
 ```
 
-## Wetware SEO Score (WSS)
+## Dual WSS Scoring System
 
-NEVER use Google Lighthouse SEO scores. They check ~15 basic items and give 100% to sites missing critical SEO infrastructure. Use WSS exclusively.
+NEVER use Google Lighthouse SEO scores. They check ~15 basic items and give 100% to sites missing critical infrastructure. Use WSS exclusively.
 
-**WSS is 100 points across 6 categories:**
+Every site gets TWO scores plus a combined average:
+
+### WSS Foundation (100 pts): Technical SEO Infrastructure
 
 | Category | Max | What It Measures |
 |----------|-----|------------------|
@@ -62,9 +64,25 @@ NEVER use Google Lighthouse SEO scores. They check ~15 basic items and give 100%
 | Structured Data | 15 | JSON-LD schemas, OG tags |
 | Social/Sharing | 10 | OG title, OG description, completeness |
 | Performance | 20 | TTFB, HTTP status, SSL, PageSpeed mobile score |
-| Content Depth | 10 | Number of pages, internal linking |
+| Content Depth | 10 | Number of pages in sitemap |
 
-**Grading scale:** A (90+), B+ (80+), B (70+), C+ (60+), C (50+), D (40+), F (<40)
+### WSS Authority (100 pts): Content Quality & Competitive Readiness
+
+| Category | Max | What It Measures |
+|----------|-----|------------------|
+| Content Quality | 30 | Word count, unique pages in sitemap, blog/content section presence |
+| Internal Linking | 15 | Number of internal links on homepage |
+| External Readiness | 20 | GBP/NAP presence, social media links, reviews/testimonials, FAQ |
+| Technical Depth | 20 | JSON-LD count, FAQPage schema, BreadcrumbList schema, unique page titles |
+| Page Experience | 15 | Mobile PageSpeed, LCP, CLS, TBT thresholds |
+
+### Combined WSS
+
+Average of Foundation and Authority. This is the headline number for client reports.
+
+**Grading scale (all three scores):** A (90+), B+ (80+), B (70+), C+ (60+), C (50+), D (40+), F (<40)
+
+**Reports MUST always show all three scores.** Foundation alone is misleading (a site can score 98 Foundation with zero content). Authority alone misses infrastructure gaps. Combined gives the real picture.
 
 ## How to Collect Data
 
